@@ -1,0 +1,6 @@
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+pcse  # Eğer simülasyon çıktılarını notebook içinde tekrar üreteceksen
