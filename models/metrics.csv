@@ -1,0 +1,2 @@
+model,strategy,dvs_filter,leaky_removed,RMSE,MAE,R2,MAPE,n_features,n_estimators
+LightGBM,GroupKFold,DVS < 1.0,"['TWSO', 'TAGP', 'TWLV', 'TWST', 'TWRT']",1179.39,792.21,0.8207,28976.35,36,1535
