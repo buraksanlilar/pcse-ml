@@ -7,3 +7,6 @@ data/
 
 models/*.pkl
 *.parquet
+notebooks/catboost_info/
+__pycache__/
+*.pyc
