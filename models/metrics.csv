@@ -1,2 +1,2 @@
-model,strategy,dvs_filter,leaky_removed,RMSE,MAE,R2,MAPE,n_features,n_estimators
-LightGBM,GroupKFold,DVS < 1.0,"['TWSO', 'TAGP', 'TWLV', 'TWST', 'TWRT']",1179.39,792.21,0.8207,28976.35,36,1535
+model,strategy,dvs_filter,leaky_removed,RMSE,MAE,R2,MAPE,safe_MAPE,n_features,n_estimators,split_train,split_val,split_test
+LightGBM,GroupKFold (train only),DVS < 1.0,"['TWSO', 'TAGP', 'TWLV', 'TWST', 'TWRT']",1007.28,592.19,0.8356,27108.46,61.21,36,274,135457,34403,15813

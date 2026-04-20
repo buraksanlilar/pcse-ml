@@ -5,16 +5,16 @@ Temizleme + Feature Engineering + ML-hazır dataset üretimi
 Proje yapısı:
   pcse-ml/
   ├── data/
-  │   ├── final_hourly_pcse_dataset_all_crops.csv  ← ham veri
-  │   ├── ml_dataset_gunluk.parquet                ← bu script üretir
+    │   ├── final_hourly_pcse_dataset_multiyear.csv  ← ham veri (multiyear)
+    │   ├── ml_dataset_multiyear.parquet             ← bu script üretir
   │   ├── kombinasyon_flags.csv                    ← bu script üretir
   │   └── cikartilan_kombinasyonlar.csv            ← bu script üretir
   ├── src/
-  │   └── pipeline_01.py                           ← bu dosya
+    │   └── pipeline01.py                            ← bu dosya
   └── notebooks/
 
 Çalıştır (pcse-ml/ klasöründen):
-  python src/pipeline_01.py
+    python src/pipeline01.py
 """
 
 import pandas as pd
@@ -25,7 +25,7 @@ from pathlib import Path
 # ─── Yollar ───────────────────────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).resolve().parent.parent   # pcse-ml/
 DATA_DIR   = BASE_DIR / "data"
-INPUT_FILE = DATA_DIR / "final_hourly_pcse_dataset_all_crops.csv"
+INPUT_FILE = DATA_DIR / "final_hourly_pcse_dataset_multiyear.csv"  # GÜNCELLENDI
 DATA_DIR.mkdir(exist_ok=True)
 
 # ─── Sabitler ─────────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ BOLGE_META = pd.DataFrame([
         "latitude": 38.355, "longitude": 35.215, "soil_type": "High Retention Clay Organic"},
 ])
 
-COMBO = ["district_name", "crop_name", "variety_name"]
+COMBO = ["district_name", "crop_name", "variety_name", "year"]  # GÜNCELLENDI
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -95,7 +95,8 @@ df = dd.read_csv(
     INPUT_FILE,
     dtype={
         "DATETIME": "str", "date": "str",
-        "district_name": "str", "crop_name": "str", "variety_name": "str"
+        "district_name": "str", "crop_name": "str", "variety_name": "str",
+        "year": "int64", "season_id": "str"  # GÜNCELLENDI
     }
 )
 
@@ -128,14 +129,16 @@ sifir_kombolar.to_csv(DATA_DIR / "cikartilan_kombinasyonlar.csv", index=False)
 gecerli_kombolar["_key"] = (
     gecerli_kombolar["district_name"] + "||" +
     gecerli_kombolar["crop_name"]     + "||" +
-    gecerli_kombolar["variety_name"]
+    gecerli_kombolar["variety_name"]  + "||" +
+    gecerli_kombolar["year"].astype(str)  # GÜNCELLENDI
 )
 gecerli_keyler = set(gecerli_kombolar["_key"])
 
 df["_key"] = (
     df["district_name"] + "||" +
     df["crop_name"]     + "||" +
-    df["variety_name"]
+    df["variety_name"]  + "||" +
+    df["year"].astype(str)  # GÜNCELLENDI
 )
 df = df[df["_key"].isin(gecerli_keyler)]
 
@@ -161,7 +164,7 @@ meteo_agg = {
     "SOIL_MOISTURE_0_7": ["mean"],
 }
 pcse_agg  = {col: "first" for col in PCSE_COLS}
-GROUP_KEYS = ["date", "district_name", "crop_name", "variety_name"]
+GROUP_KEYS = ["date", "district_name", "crop_name", "variety_name", "year", "season_id"]  # GÜNCELLENDI
 
 gunluk = (
     df.groupby(GROUP_KEYS)
@@ -203,6 +206,7 @@ for col in ["AIR_TEMP_mean", "AIR_HUMIDITY_mean", "SOIL_MOISTURE_0_7_mean"]:
             gunluk.groupby(COMBO)[col]
             .transform(lambda x: x.rolling(w, min_periods=1).mean())
         )
+# COMBO içinde year olduğu için tüm kumulatif ve rolling feature'lar sezon bazlı resetlenir.  # GÜNCELLENDI
 
 # Sıcaklık aralığı
 gunluk["TEMP_range"] = gunluk["AIR_TEMP_max"] - gunluk["AIR_TEMP_min"]
@@ -245,10 +249,25 @@ for col in ["crop_name", "variety_name", "district_name", "soil_type", "growth_s
     gunluk[f"{col}_enc"] = pd.Categorical(gunluk[col]).codes
 
 
+# ─── [8.5] Yıl bazlı split + CV grup bilgisi ─────────────────────────────────  # GÜNCELLENDI
+print("\n[8.5/9] Yıl bazlı split ve CV grup bilgisi ekleniyor...")  # GÜNCELLENDI
+
+gunluk["data_split"] = "holdout"  # GÜNCELLENDI
+gunluk.loc[gunluk["year"].between(2014, 2021), "data_split"] = "train"  # GÜNCELLENDI
+gunluk.loc[gunluk["year"].between(2022, 2023), "data_split"] = "val"  # GÜNCELLENDI
+gunluk.loc[gunluk["year"] == 2024, "data_split"] = "test"  # GÜNCELLENDI
+
+# GroupKFold sadece train içinde kullanılmak üzere yıl-bağımsız grup kimliği.  # GÜNCELLENDI
+gunluk["cv_group"] = gunluk["district_name"] + "_" + gunluk["crop_name"]  # GÜNCELLENDI
+
+split_ozet = gunluk["data_split"].value_counts(dropna=False).to_dict()  # GÜNCELLENDI
+print(f"      Split özeti: {split_ozet}")  # GÜNCELLENDI
+
+
 # ─── [9] Kaydet ───────────────────────────────────────────────────────────────
 print("\n[9/9] Kaydediliyor...")
 
-out_parquet = DATA_DIR / "ml_dataset_gunluk.parquet"
+out_parquet = DATA_DIR / "ml_dataset_multiyear.parquet"  # GÜNCELLENDI
 out_flags   = DATA_DIR / "kombinasyon_flags.csv"
 
 gunluk.to_parquet(out_parquet, index=False)

@@ -76,7 +76,8 @@ def load_predictor():
 
 @st.cache_data
 def load_data():
-    return pd.read_parquet(DATA_DIR / "ml_dataset_gunluk.parquet")
+    df = pd.read_parquet(DATA_DIR / "ml_dataset_multiyear.parquet")
+    return df
 
 @st.cache_data
 def load_leaderboard():
@@ -86,6 +87,16 @@ def load_leaderboard():
 @st.cache_resource
 def load_shap_explainer(_model):
     return shap.TreeExplainer(_model)
+
+@st.cache_data(show_spinner=False)
+def compute_single_shap_cached(model_path: str, feature_cols: tuple, feature_values: tuple):
+    model = joblib.load(model_path)
+    explainer = shap.TreeExplainer(model)
+    x_row = pd.DataFrame([dict(zip(feature_cols, feature_values))])
+    shap_vals = explainer.shap_values(x_row)
+    if isinstance(shap_vals, list):
+        return shap_vals[0][0].tolist()
+    return shap_vals[0].tolist()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -161,7 +172,7 @@ if page == "🎯 Tek Tahmin":
     if st.button("🚀 Tahmin Et", type="primary", use_container_width=True):
         params = dict(
             variety_name=variety, dvs=dvs, gdd_cumsum=gdd_cum, precip_cumsum=prec_cum,
-            day_of_year=int(doy), month=int(pd.Timestamp("2024-01-01") + pd.Timedelta(days=doy-1)).month,
+            day_of_year=int(doy), month=(pd.Timestamp("2024-01-01") + pd.Timedelta(days=int(doy)-1)).month,
             week=int((doy // 7) + 1),
             air_temp_mean=t_mean, air_temp_min=t_min, air_temp_max=t_max,
             air_humidity_mean=humid, air_humidity_min=humid*0.6, air_humidity_max=humid*1.3,
@@ -203,8 +214,8 @@ if page == "🎯 Tek Tahmin":
             orientation='h', marker_color='#2e86ab',
             error_x=dict(
                 type='data', symmetric=False,
-                plus=[unc['ci_upper'] - result['twso_pred']],
-                minus=[result['twso_pred'] - unc['ci_lower']],
+                array=[unc['ci_upper'] - result['twso_pred']],
+                arrayminus=[result['twso_pred'] - unc['ci_lower']],
                 color='#555'
             )
         ))
@@ -215,12 +226,18 @@ if page == "🎯 Tek Tahmin":
         # SHAP tek örnek
         st.markdown("#### Feature Katkıları (SHAP)")
         try:
-            explainer   = load_shap_explainer(predictor.model)
             feat_row    = predictor._build_row({"district_name": district, "crop_name": crop, **params})
-            shap_vals   = explainer.shap_values(feat_row)
-            top_idx     = np.argsort(np.abs(shap_vals[0]))[-15:][::-1]
+            feat_vals = tuple(float(v) for v in feat_row.iloc[0].values)
+            shap_vec = np.array(
+                compute_single_shap_cached(
+                    str(predictor.model_path),
+                    tuple(predictor.feature_cols),
+                    feat_vals,
+                )
+            )
+            top_idx     = np.argsort(np.abs(shap_vec))[-15:][::-1]
             top_feats   = [predictor.feature_cols[i] for i in top_idx]
-            top_vals    = shap_vals[0][top_idx]
+            top_vals    = shap_vec[top_idx]
             colors      = ['#2e86ab' if v > 0 else '#e84855' for v in top_vals]
 
             fig_shap, ax = plt.subplots(figsize=(8, 4))
@@ -244,7 +261,7 @@ elif page == "📊 Karşılaştırma":
 
     with tab1:
         combo_stats = (
-            df_full.groupby(["crop_name", "district_name"])["twso_final"]
+            df_full.groupby(["crop_name", "district_name", "year"])["twso_final"]
             .first()
             .reset_index()
             .groupby("crop_name")["twso_final"]
@@ -254,7 +271,7 @@ elif page == "📊 Karşılaştırma":
             .reset_index()
         )
         fig_box = px.box(
-            df_full.groupby(["crop_name","district_name","variety_name"])["twso_final"].first().reset_index(),
+            df_full.groupby(["crop_name","district_name","variety_name","year"])["twso_final"].first().reset_index(),
             x="crop_name", y="twso_final", color="crop_name",
             title="Ürün Bazlı Verim Dağılımı",
             labels={"twso_final": "Verim (kg/ha)", "crop_name": "Ürün"},
@@ -265,7 +282,7 @@ elif page == "📊 Karşılaştırma":
 
     with tab2:
         dist_stats = (
-            df_full.groupby(["district_name","crop_name"])["twso_final"]
+            df_full.groupby(["district_name","crop_name","year"])["twso_final"]
             .first().reset_index()
             .groupby("district_name")["twso_final"]
             .agg(["mean","count"])
@@ -300,6 +317,19 @@ elif page == "📊 Karşılaştırma":
                 if col in ts_df.columns:
                     fig_ts = px.line(ts_df, x="date", y=col,
                                      title=f"{col} — {sel_crop} / {sel_dist}")
+
+                    if "DVS" in ts_df.columns:
+                        for dvs_point in [0.0, 1.0]:
+                            hit = ts_df[ts_df["DVS"] >= dvs_point]
+                            if len(hit) > 0:
+                                cross_date = hit.iloc[0]["date"]
+                                fig_ts.add_vline(
+                                    x=cross_date,
+                                    line_dash="dash",
+                                    line_color="#444",
+                                    annotation_text=f"DVS={dvs_point:.0f}",
+                                    annotation_position="top right",
+                                )
                     st.plotly_chart(fig_ts, use_container_width=True)
         else:
             st.warning("Bu kombinasyon için veri bulunamadı.")
@@ -315,8 +345,12 @@ elif page == "🗺️ Harita":
 
     map_data = (
         df_full[df_full["crop_name"] == sel_crop_map]
-        .groupby("district_name")["twso_final"]
+        .groupby(["district_name","year"])["twso_final"]
         .first()
+        .reset_index()
+        .groupby("district_name")["twso_final"]
+        .mean()
+        .round(1)
         .reset_index()
     )
     map_data = map_data.merge(
@@ -389,9 +423,9 @@ elif page == "ℹ️ Hakkında":
 
     #### Veri Kaynağı
     - 15 farklı Türkiye bölgesi
-    - 21 farklı ürün
+    - 19 farklı ürün (geçerli)
     - Saatlik meteoroloji + PCSE durum değişkenleri
-    - Tarih aralığı: 2023-01-01 → 2024-06-10
+    - Tarih aralığı: 2014-01-01 → 2024-12-31 (11 yıl)
 
     #### Pipeline
     | Adım | Dosya | İçerik |
@@ -399,7 +433,7 @@ elif page == "ℹ️ Hakkında":
     | 01 | `pipeline_01.py` | Temizleme + Feature Engineering |
     | 02 | `02_model_lightgbm.ipynb` | LightGBM + Optuna Tuning |
     | 03 | `03_model_comparison.ipynb` | Model Karşılaştırması |
-    | 04 | `04_inference_pipeline.py` | Tahmin Servisi |
+    | 04 | `inference_pipeline.py` | Tahmin Servisi |
     | 05 | `05_streamlit_dashboard.py` | Bu Dashboard |
 
     #### Hedef Değişken
