@@ -164,6 +164,9 @@ class YieldPredictor:
         alias = {
             "district":           "district_name",
             "crop":               "crop_name",
+            "lat":                "latitude",
+            "lon":                "longitude",
+            "lng":                "longitude",
             "air_temp_mean":      "AIR_TEMP_mean",
             "air_temp_min":       "AIR_TEMP_min",
             "air_temp_max":       "AIR_TEMP_max",
@@ -196,7 +199,7 @@ class YieldPredictor:
             if old in out.columns and new not in out.columns:
                 out[new] = out[old]
         if "district_name" not in out.columns:
-            out["district_name"] = "Konya, Karapınar"
+            out["district_name"] = "Unknown"
         if "crop_name" not in out.columns:
             out["crop_name"] = "wheat"
         if "variety_name" not in out.columns:
@@ -248,6 +251,18 @@ class YieldPredictor:
         meta_df.index.name = "district_name"
         meta_df = meta_df.reset_index()
         df = df.merge(meta_df, on="district_name", how="left", suffixes=("", "_meta"))
+
+        if "latitude" not in df.columns:
+            df["latitude"] = np.nan
+        if "longitude" not in df.columns:
+            df["longitude"] = np.nan
+        if "soil_type" not in df.columns:
+            df["soil_type"] = np.nan
+
+        df["latitude"]  = df["latitude"].fillna(df.get("latitude_meta", np.nan))
+        df["longitude"] = df["longitude"].fillna(df.get("longitude_meta", np.nan))
+        df["soil_type"] = df["soil_type"].fillna(df.get("soil_type_meta", np.nan))
+
         df["latitude"]  = df["latitude"].fillna(38.0)
         df["longitude"] = df["longitude"].fillna(34.0)
         df["soil_type"] = df["soil_type"].fillna("Medium")
@@ -299,17 +314,19 @@ class YieldPredictor:
         return self._build_features_df(pd.DataFrame([row]))
 
     # ── Tek tahmin ────────────────────────────────────────────────────────────
-    def predict_single(self, district: str, crop: str, **kwargs) -> dict:
-        row  = {"district_name": district, "crop_name": crop, **kwargs}
+    def predict_single(self, district: str | None = None, crop: str = "wheat", **kwargs) -> dict:
+        row  = {"district_name": district or "Unknown", "crop_name": crop, **kwargs}
         X    = self._build_row(row)
-        pred = float(self.model.predict(X)[0])
-        pred = max(pred, 0.0)
+        raw_pred = float(self.model.predict(X)[0])
+        pred = max(raw_pred, 0.0)
 
         result = {
-            "district":     district,
+            "district":     district or "Unknown",
             "crop":         crop,
             "variety":      kwargs.get("variety_name", "Unknown"),
             "twso_pred":    round(pred, 1),
+            "twso_pred_raw": round(raw_pred, 1),
+            "clipped_to_zero": bool(raw_pred < 0),
             "growth_stage": self._dvs_donem(kwargs.get("dvs", 0.5)),
             "input_summary": {
                 "air_temp_mean":  kwargs.get("air_temp_mean"),
@@ -330,13 +347,13 @@ class YieldPredictor:
         return out
 
     # ── Güven aralığı (bootstrap) ─────────────────────────────────────────────
-    def predict_with_uncertainty(self, district: str, crop: str,
+    def predict_with_uncertainty(self, district: str | None = None, crop: str = "wheat",
                                   n_bootstrap: int = 50, **kwargs) -> dict:
         """
         Bootstrap ile yaklaşık güven aralığı.
         Hızlı tahmin için n_bootstrap=30 yeterli.
         """
-        row   = {"district_name": district, "crop_name": crop, **kwargs}
+        row   = {"district_name": district or "Unknown", "crop_name": crop, **kwargs}
         X     = self._build_row(row)
         preds = []
 
@@ -355,7 +372,7 @@ class YieldPredictor:
 
         preds  = np.clip(np.array(preds, dtype=float), a_min=0.0, a_max=None)
         result = {
-            "district":  district,
+            "district":  district or "Unknown",
             "crop":      crop,
             "twso_pred": round(float(np.mean(preds)), 1),
             "ci_lower":  round(float(np.percentile(preds, 10)), 1),

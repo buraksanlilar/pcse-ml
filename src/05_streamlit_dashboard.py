@@ -104,7 +104,7 @@ def compute_single_shap_cached(model_path: str, feature_cols: tuple, feature_val
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Sunflower_as_food.jpg/240px-Sunflower_as_food.jpg",
-             use_column_width=True)
+             use_container_width=True)
     st.title("🌾 PCSE Verim Tahmini")
     st.markdown("---")
 
@@ -134,13 +134,15 @@ crops     = sorted(TBASE.keys())
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "🎯 Tek Tahmin":
     st.header("🎯 Verim Tahmini")
-    st.markdown("Bölge, ürün ve meteoroloji verilerini girin → anlık tahmin alın.")
+    st.markdown("Koordinat, ürün ve meteoroloji verilerini girin → anlık tahmin alın.")
 
     col1, col2, col3 = st.columns([1.2, 1.2, 1])
 
     with col1:
         st.subheader("📍 Konum & Ürün")
-        district = st.selectbox("Bölge", districts)
+        latitude = st.number_input("Enlem (latitude)", value=38.0, format="%.6f")
+        longitude = st.number_input("Boylam (longitude)", value=34.0, format="%.6f")
+        soil_type = st.text_input("Toprak türü (opsiyonel)", value="Medium")
         crop     = st.selectbox("Ürün", crops)
         variety  = st.text_input("Çeşit (opsiyonel)", value="Default")
         dvs      = st.slider("DVS (Gelişim Aşaması)", -0.1, 2.0, 1.0, 0.05)
@@ -177,78 +179,78 @@ if page == "🎯 Tek Tahmin":
             air_temp_mean=t_mean, air_temp_min=t_min, air_temp_max=t_max,
             air_humidity_mean=humid, air_humidity_min=humid*0.6, air_humidity_max=humid*1.3,
             precip_sum=precip, soil_temp_mean=soil_t, soil_moisture_mean=soil_m,
+            latitude=latitude, longitude=longitude, soil_type=soil_type,
             lai=lai, tagp=tagp, twlv=twlv, twst=twst, twrt=twrt, sm=sm,
         )
 
-        with st.spinner("Hesaplanıyor..."):
-            result = predictor.predict_single(district, crop, **params)
-            unc    = predictor.predict_with_uncertainty(district, crop, **params)
-
-        # Metrik kartları
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.markdown(f"""<div class="metric-card">
-                <div class="metric-label">Tahmin Verim</div>
-                <div class="metric-val">{result['twso_pred']:,.0f}</div>
-                <div class="metric-label">kg/ha</div></div>""", unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""<div class="metric-card">
-                <div class="metric-label">%80 Alt Sınır</div>
-                <div class="metric-val">{unc['ci_lower']:,.0f}</div>
-                <div class="metric-label">kg/ha</div></div>""", unsafe_allow_html=True)
-        with c3:
-            st.markdown(f"""<div class="metric-card">
-                <div class="metric-label">%80 Üst Sınır</div>
-                <div class="metric-val">{unc['ci_upper']:,.0f}</div>
-                <div class="metric-label">kg/ha</div></div>""", unsafe_allow_html=True)
-        with c4:
-            st.markdown(f"""<div class="metric-card">
-                <div class="metric-label">Büyüme Dönemi</div>
-                <div class="metric-val" style="font-size:1.3rem">{result['growth_stage'].title()}</div>
-                <div class="metric-label">DVS={dvs:.2f}</div></div>""", unsafe_allow_html=True)
-
-        # Güven aralığı çubuğu
-        st.markdown("#### Tahmin Güven Aralığı")
-        fig_ci = go.Figure(go.Bar(
-            x=[result['twso_pred']], y=["Tahmin"],
-            orientation='h', marker_color='#2e86ab',
-            error_x=dict(
-                type='data', symmetric=False,
-                array=[unc['ci_upper'] - result['twso_pred']],
-                arrayminus=[result['twso_pred'] - unc['ci_lower']],
-                color='#555'
-            )
-        ))
-        fig_ci.update_layout(height=150, margin=dict(l=0, r=0, t=10, b=10),
-                              xaxis_title="twso_final (kg/ha)")
-        st.plotly_chart(fig_ci, use_container_width=True)
-
-        # SHAP tek örnek
-        st.markdown("#### Feature Katkıları (SHAP)")
         try:
-            feat_row    = predictor._build_row({"district_name": district, "crop_name": crop, **params})
-            feat_vals = tuple(float(v) for v in feat_row.iloc[0].values)
-            shap_vec = np.array(
-                compute_single_shap_cached(
-                    str(predictor.model_path),
-                    tuple(predictor.feature_cols),
-                    feat_vals,
-                )
-            )
-            top_idx     = np.argsort(np.abs(shap_vec))[-15:][::-1]
-            top_feats   = [predictor.feature_cols[i] for i in top_idx]
-            top_vals    = shap_vec[top_idx]
-            colors      = ['#2e86ab' if v > 0 else '#e84855' for v in top_vals]
+            with st.spinner("Hesaplanıyor..."):
+                result = predictor.predict_single(None, crop, **params)
+                unc    = predictor.predict_with_uncertainty(None, crop, **params)
 
-            fig_shap, ax = plt.subplots(figsize=(8, 4))
-            ax.barh(top_feats[::-1], top_vals[::-1], color=colors[::-1])
-            ax.axvline(0, color='black', lw=0.8)
-            ax.set_title("SHAP — Top 15 Feature Katkısı")
-            ax.set_xlabel("SHAP Değeri")
-            plt.tight_layout()
-            st.pyplot(fig_shap)
+            st.success("Tahmin üretildi.")
+
+            if result.get("clipped_to_zero"):
+                st.warning(
+                    f"Model ham çıktısı negatifti ({result.get('twso_pred_raw')} kg/ha) ve 0'a kırpıldı. "
+                    "Bu genelde girilen kombinasyonun eğitim dağılımının dışında kaldığını gösterir."
+                )
+
+            # Daha görünür çıktı
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Tahmin Verim", f"{result['twso_pred']:,.0f} kg/ha")
+            c2.metric("%80 Alt Sınır", f"{unc['ci_lower']:,.0f} kg/ha")
+            c3.metric("%80 Üst Sınır", f"{unc['ci_upper']:,.0f} kg/ha")
+            c4.metric("Büyüme Dönemi", result['growth_stage'].title())
+
+            with st.expander("Tahmin özeti", expanded=True):
+                st.json(result)
+                st.json(unc)
+
+            # Güven aralığı çubuğu
+            st.markdown("#### Tahmin Güven Aralığı")
+            fig_ci = go.Figure(go.Bar(
+                x=[result['twso_pred']], y=["Tahmin"],
+                orientation='h', marker_color='#2e86ab',
+                error_x=dict(
+                    type='data', symmetric=False,
+                    array=[unc['ci_upper'] - result['twso_pred']],
+                    arrayminus=[result['twso_pred'] - unc['ci_lower']],
+                    color='#555'
+                )
+            ))
+            fig_ci.update_layout(height=150, margin=dict(l=0, r=0, t=10, b=10),
+                                  xaxis_title="twso_final (kg/ha)")
+            st.plotly_chart(fig_ci, use_container_width=True)
+
+            # SHAP tek örnek
+            st.markdown("#### Feature Katkıları (SHAP)")
+            try:
+                feat_row    = predictor._build_row({"district_name": "Unknown", "crop_name": crop, **params})
+                feat_vals = tuple(float(v) for v in feat_row.iloc[0].values)
+                shap_vec = np.array(
+                    compute_single_shap_cached(
+                        str(predictor.model_path),
+                        tuple(predictor.feature_cols),
+                        feat_vals,
+                    )
+                )
+                top_idx     = np.argsort(np.abs(shap_vec))[-15:][::-1]
+                top_feats   = [predictor.feature_cols[i] for i in top_idx]
+                top_vals    = shap_vec[top_idx]
+                colors      = ['#2e86ab' if v > 0 else '#e84855' for v in top_vals]
+
+                fig_shap, ax = plt.subplots(figsize=(8, 4))
+                ax.barh(top_feats[::-1], top_vals[::-1], color=colors[::-1])
+                ax.axvline(0, color='black', lw=0.8)
+                ax.set_title("SHAP — Top 15 Feature Katkısı")
+                ax.set_xlabel("SHAP Değeri")
+                plt.tight_layout()
+                st.pyplot(fig_shap)
+            except Exception as e:
+                st.info(f"SHAP hesaplanamadı: {e}")
         except Exception as e:
-            st.info(f"SHAP hesaplanamadı: {e}")
+            st.error(f"Tahmin üretilemedi: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
